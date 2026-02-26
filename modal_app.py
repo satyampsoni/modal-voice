@@ -23,6 +23,7 @@ app = modal.App("modal-voice")
 hf_cache = modal.Volume.from_name("modalvoice-hf-cache", create_if_missing=True)
 tts_cache = modal.Volume.from_name("modalvoice-tts-cache", create_if_missing=True)
 rag_cache = modal.Volume.from_name("modalvoice-rag-cache", create_if_missing=True)
+repo_root = Path(__file__).resolve().parent
 
 base_image = modal.Image.debian_slim(python_version="3.11").apt_install("ffmpeg")
 gpu_base_image = modal.Image.from_registry(
@@ -33,7 +34,7 @@ gpu_base_image = modal.Image.from_registry(
 stt_image = (
     gpu_base_image
     .pip_install("faster-whisper==1.1.1", "requests", "fastapi==0.115.8", "python-multipart==0.0.20")
-    .add_local_python_source("modal_voice")
+    .add_local_dir(str(repo_root), remote_path="/root/app")
 )
 
 llm_image = (
@@ -48,20 +49,20 @@ llm_image = (
         "fastapi==0.115.8",
         "python-multipart==0.0.20",
     )
-    .add_local_python_source("modal_voice")
+    .add_local_dir(str(repo_root), remote_path="/root/app")
 )
 
 tts_image = (
     gpu_base_image
     .pip_install("TTS==0.22.0", "fastapi==0.115.8", "python-multipart==0.0.20")
-    .add_local_python_source("modal_voice")
+    .add_local_dir(str(repo_root), remote_path="/root/app")
 )
 
 web_image = (
     base_image
     .pip_install("fastapi==0.115.8", "python-multipart==0.0.20")
-    .add_local_python_source("modal_voice")
-    .add_local_dir("modal_voice/static", remote_path="/root/static")
+    .add_local_dir(str(repo_root), remote_path="/root/app")
+    .add_local_dir(str(repo_root / "static"), remote_path="/root/static")
 )
 
 

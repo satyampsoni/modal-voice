@@ -133,7 +133,7 @@ cd modal-voice
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install modal
+pip install -r requirements.txt
 modal setup
 modal serve modal_app.py
 ```
