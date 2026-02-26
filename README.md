@@ -125,6 +125,7 @@ modal_voice/
 
 ## How to Run
 
+Assume `modal_voice` is the project root users run from.
 
 ```bash
 git clone https://github.com/satyampsoni/modal-voice.git
@@ -134,7 +135,7 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install modal
 modal setup
-modal serve -m modal_voice.modal_app
+modal serve modal_app.py
 ```
 
 Open the `web_app` URL printed by Modal.

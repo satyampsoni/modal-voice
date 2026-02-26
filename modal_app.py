@@ -9,9 +9,15 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from modal_voice.llm import ModalVLLM
-from modal_voice.stt import WhisperSTT
-from modal_voice.tts import CoquiTTS
+try:
+    from modal_voice.llm import ModalVLLM
+    from modal_voice.stt import WhisperSTT
+    from modal_voice.tts import CoquiTTS
+except ModuleNotFoundError:
+    # Support flat repo layout where files live at repository root.
+    from llm import ModalVLLM
+    from stt import WhisperSTT
+    from tts import CoquiTTS
 
 app = modal.App("modal-voice")
 hf_cache = modal.Volume.from_name("modalvoice-hf-cache", create_if_missing=True)
@@ -111,7 +117,10 @@ class LLMService:
             enforce_eager=enforce_eager,
         )
         self.llm.load()
-        from modal_voice.rag import ModalExamplesRAG
+        try:
+            from modal_voice.rag import ModalExamplesRAG
+        except ModuleNotFoundError:
+            from rag import ModalExamplesRAG
 
         self.rag = ModalExamplesRAG(max_pages=rag_pages)
         self.rag.load(max_cache_age_s=int(os.environ.get("RAG_CACHE_MAX_AGE_S", "86400")))
@@ -274,4 +283,4 @@ def web_app() -> FastAPI:
 
 @app.local_entrypoint()
 def main() -> None:
-    print("Serve with: modal serve -m modal_voice.modal_app")
+    print("Serve with: modal serve modal_app.py")

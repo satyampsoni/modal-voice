@@ -6,7 +6,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from modal_voice.prompts import MODAL_SYSTEM_PROMPT
+try:
+    from modal_voice.prompts import MODAL_SYSTEM_PROMPT
+except ModuleNotFoundError:
+    from prompts import MODAL_SYSTEM_PROMPT
 
 
 @dataclass
