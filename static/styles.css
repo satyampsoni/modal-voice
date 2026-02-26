@@ -1,0 +1,103 @@
+:root {
+  --bg: #e9fbe9;
+  --text: #111111;
+  --muted: #2b5a2b;
+  --modal-green: #13b54a;
+  --ring: rgba(19, 181, 74, 0.22);
+  --ring-live: rgba(19, 181, 74, 0.38);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+}
+
+.logo-btn {
+  margin: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--modal-green);
+  cursor: pointer;
+}
+
+.logo-btn:active {
+  transform: scale(0.99);
+}
+
+.subtitle {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.record-btn {
+  width: 86px;
+  height: 86px;
+  border: none;
+  border-radius: 999px;
+  background: #0f7f36;
+  cursor: pointer;
+  position: relative;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  box-shadow: 0 0 0 10px var(--ring);
+}
+
+.record-btn::after {
+  content: "";
+  position: absolute;
+  inset: 24px;
+  border-radius: 999px;
+  background: #d3f5de;
+  opacity: 0.25;
+}
+
+.record-btn:active {
+  transform: scale(0.97);
+}
+
+.record-btn.recording {
+  animation: pulse 1.25s infinite ease-in-out;
+  box-shadow: 0 0 0 14px var(--ring-live);
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 600px) {
+  .record-btn {
+    width: 78px;
+    height: 78px;
+  }
+}
