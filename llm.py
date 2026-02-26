@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+# Support flat-repo imports both locally and in Modal containers.
+for p in (Path(__file__).resolve().parent, Path("/root/app")):
+    p_str = str(p)
+    if p_str not in sys.path:
+        sys.path.insert(0, p_str)
 
 try:
     from modal_voice.prompts import MODAL_SYSTEM_PROMPT

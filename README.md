@@ -125,7 +125,7 @@ modal_voice/
 
 ## How to Run
 
-Assume `modal_voice` is the project root users run from.
+Assume `modal-voice` is the project root users run from.
 
 ```bash
 git clone https://github.com/satyampsoni/modal-voice.git

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -8,6 +9,12 @@ import modal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+
+# Ensure flat-layout modules are importable inside Modal containers.
+for p in (Path(__file__).resolve().parent, Path("/root/app")):
+    p_str = str(p)
+    if p_str not in sys.path:
+        sys.path.insert(0, p_str)
 
 try:
     from modal_voice.llm import ModalVLLM
