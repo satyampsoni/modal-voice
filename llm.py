@@ -68,6 +68,31 @@ class ModalVLLM:
         out = re.sub(r"\\s+", " ", out).strip()
         return out
 
+    def _finalize_sentences(self, text: str, max_sentences: int = 4, max_words: int = 110) -> str:
+        cleaned = self._clean_output(text)
+        if not cleaned:
+            return cleaned
+
+        words = cleaned.split()
+        if len(words) > max_words:
+            cleaned = " ".join(words[:max_words]).strip()
+
+        # Keep only first N sentences to bound TTS time while staying complete.
+        parts = re.split(r"(?<=[.!?])\\s+", cleaned)
+        pruned = " ".join(parts[:max_sentences]).strip()
+        if not pruned:
+            pruned = cleaned
+
+        # Avoid trailing partial clauses when punctuation is missing.
+        if pruned[-1] not in ".!?":
+            last_punct = max(pruned.rfind("."), pruned.rfind("!"), pruned.rfind("?"))
+            if last_punct > 20:
+                pruned = pruned[: last_punct + 1].strip()
+            else:
+                pruned = pruned.rstrip(",;:") + "."
+
+        return pruned
+
     def generate(self, user_text: str, max_tokens: int = 64, temperature: float = 0.1) -> LLMResult:
         if self.llm is None or self.tokenizer is None:
             raise RuntimeError("vLLM model is not loaded")
@@ -92,7 +117,7 @@ class ModalVLLM:
 
         text = ""
         if outputs and outputs[0].outputs:
-            text = self._clean_output(outputs[0].outputs[0].text)
+            text = self._finalize_sentences(outputs[0].outputs[0].text)
 
         return LLMResult(text=text, latency_s=latency_s)
 
@@ -118,17 +143,16 @@ class ModalVLLM:
                 "What does Modal do? Give a direct one-sentence definition first, then one practical use case."
             )
 
-        contextual_user = normalized_user
-        if context_lines:
-            contextual_user += (
-                "\\n\\nUse ONLY factual information consistent with these Modal docs snippets when answering. "
-                "Prioritize concrete Modal behavior and avoid generic ML platform descriptions.\\n\\nSources:\\n"
-                + "\\n\\n".join(context_lines)
+        if not context_lines:
+            return LLMResult(
+                text="I do not have enough verified Modal docs context for that question. Please rephrase with Modal-specific terms.",
+                latency_s=0.0,
             )
-        else:
-            contextual_user += (
-                "\\n\\nNo sources were retrieved. Use known Modal platform facts conservatively; "
-                "if uncertain, say so briefly."
-            )
+
+        contextual_user = normalized_user + (
+            "\\n\\nUse ONLY factual information consistent with these Modal docs snippets when answering. "
+            "Prioritize concrete Modal behavior and avoid generic ML platform descriptions.\\n\\nSources:\\n"
+            + "\\n\\n".join(context_lines)
+        )
 
         return self.generate(contextual_user, max_tokens=max_tokens, temperature=temperature)

@@ -1,111 +1,247 @@
 # ModalVoice
 
-ModalVoice is a fully self-hosted voice assistant on Modal:
+A fully self-hosted, voice-first AI assistant deployed on Modal.
 
-1. Browser audio input
-2. Whisper STT (GPU)
-3. RAG retrieval from Modal docs (`/docs/examples`, `/docs/guide`, `/docs`)
-4. vLLM response generation with open-weight model (GPU)
-5. Coqui TTS synthesis (open-source)
-6. Audio-only response playback in browser
+ModalVoice is designed to feel like a real-time voice assistant while staying production-minded: it records speech in the browser, transcribes with Whisper, retrieves grounded context from Modal docs via vector search, generates answers with vLLM, synthesizes audio with open-source TTS, and returns audio-only responses.
 
-No paid APIs or API keys are required.
+The assistant is intentionally specialized for Modal topics (deployment, GPU workloads, autoscaling, functions, images, secrets, and operations).
+
+---
+
+## Why This Project
+
+Most voice assistants are stitched together from paid external APIs. ModalVoice demonstrates an end-to-end, open-model architecture that is:
+
+- Self-hosted inference on Modal
+- Grounded with docs retrieval (RAG)
+- Production-structured and observable
+- Optimized for practical latency
+
+---
+
+## Core Capabilities
+
+- Browser microphone input (`MediaRecorder`)
+- Speech-to-text with Whisper on GPU
+- Vector retrieval against Modal docs (`/docs`, `/docs/guide`, `/docs/examples`)
+- Answer generation using vLLM + open-weight LLM
+- Text-to-speech with Coqui TTS
+- Audio-only response playback in browser
+- Per-stage latency logging (`stt`, `rag`, `llm`, `tts`, `total`)
+
+---
+
+## End-to-End Flow
+
+![ModalVoice End-to-End Flow](./diagram.png)
+
+This diagram represents the complete runtime path:
+- Browser capture -> API ingest
+- STT (Whisper) -> RAG (Chroma) -> LLM (vLLM) -> TTS (Coqui)
+- Audio-only response returned to browser
+- Persistent caches (HF, TTS, RAG) used to reduce repeat latency
+
+---
+
+## Architecture 
+
+### 1. `STTService` (`@app.cls`, GPU)
+- Loads Whisper once in `@modal.enter()`
+- Uses faster decode defaults for low latency
+- Returns transcript + STT latency
+
+### 2. `LLMService` (`@app.cls`, GPU)
+- Loads vLLM model once in `@modal.enter()`
+- Builds/loads Chroma vector index from Modal docs
+- Retrieves top-k source snippets per query
+- Generates answer strictly grounded in retrieved context
+- Includes in-memory answer cache for repeated prompts
+
+### 3. `TTSService` (`@app.cls`, GPU)
+- Loads Coqui model once in `@modal.enter()`
+- Synthesizes response to WAV
+- Includes in-memory synthesis cache for repeated text
+
+### 4. `web_app` (`@modal.asgi_app`)
+- Serves minimal static UI
+- Accepts uploaded audio
+- Orchestrates STT -> RAG -> LLM -> TTS pipeline
+- Returns `audio/wav` only
+
+---
 
 ## Project Structure
 
-- `modal_voice/modal_app.py`: Modal app + web API + service orchestration
-- `modal_voice/stt.py`: Whisper transcription wrapper
-- `modal_voice/llm.py`: vLLM generation wrapper
-- `modal_voice/tts.py`: Coqui TTS wrapper
-- `modal_voice/prompts.py`: Modal-specialized system prompt
-- `modal_voice/rag.py`: lightweight RAG indexer/retriever for Modal examples docs
-- `modal_voice/static/index.html`: minimal audio-only UI
-- `modal_voice/static/styles.css`: clean minimal styling
-- `modal_voice/static/app.js`: record/send/autoplay behavior
+```text
+modal_voice/
+  modal_app.py         # Modal app, services, API orchestration
+  stt.py               # Whisper wrapper
+  llm.py               # vLLM wrapper + output normalization
+  tts.py               # Coqui TTS wrapper
+  rag.py               # Chroma vector DB ingestion + retrieval
+  prompts.py           # Modal-specialized prompt policy
+  static/
+    index.html         # Minimal UI shell
+    styles.css         # Clean visual design
+    app.js             # Record/send/autoplay behavior
+  README.md
+```
 
-## Architecture
+---
 
-- `STTService` (`@app.cls`): loads Whisper once per container and transcribes audio.
-- `LLMService` (`@app.cls`): loads vLLM once, builds/loads cached RAG index from Modal examples docs, and generates grounded answers.
-- `TTSService` (`@app.cls`): loads Coqui model once per container and synthesizes WAV audio.
-- `web_app` (`@modal.asgi_app`): serves UI and `/api/voice`.
+## Stack used
 
-## Request Flow
+### Runtime & Orchestration
+- [Modal](https://modal.com)
+- Python 3.11
+- FastAPI (ASGI endpoint)
 
-1. Frontend records microphone audio.
-2. `POST /api/voice` uploads the recording.
-3. Backend calls STT -> LLM -> TTS in sequence.
-4. LLM stage retrieves top matching examples snippets from local RAG cache first.
-5. Backend returns audio bytes (`audio/wav`) only.
-6. Frontend auto-plays returned audio.
+### Speech-to-Text
+- `faster-whisper`
+- Whisper model (`tiny`/`small` configurable)
 
-## Latency Logging
+### Retrieval (RAG)
+- `chromadb` (open-source, self-hosted in container)
+- `sentence-transformers` embeddings (`all-MiniLM-L6-v2`)
+- `requests` + `beautifulsoup4` for docs ingestion
 
-For each request, backend logs:
+### LLM Inference
+- `vllm`
+- Open-weight instruct model (default: `microsoft/Phi-3-mini-4k-instruct`)
 
-- `stt_latency_s`
-- `rag_latency_s`
-- `rag_hits`
-- `llm_latency_s`
-- `tts_latency_s`
-- `total_latency_s`
+### Text-to-Speech
+- `TTS` (Coqui)
+- Default voice model: `tts_models/en/ljspeech/vits`
+- `espeak-ng` runtime dependency
 
-These are also returned as HTTP headers:
+---
 
-- `x-stt-latency-s`
-- `x-rag-latency-s`
-- `x-rag-hits`
-- `x-llm-latency-s`
-- `x-tts-latency-s`
-- `x-total-latency-s`
+## Scope
 
-## Deployment
+### In Scope
+- Voice Q&A experience focused on Modal
+- Grounded responses from indexed Modal docs
+- Fully self-hosted inference on Modal
+- Low-latency engineering via warm containers + caching
 
-From project root (recommended):
+### Out of Scope
+- General-purpose open-domain assistant behavior
+- Persistent user chat history/memory
+- Multi-user authentication and RBAC
+- Bidirectional streaming audio protocol (current flow is request/response)
+
+---
+
+## How to Run
+
 
 ```bash
+git clone https://github.com/satyampsoni/modal-voice.git
+cd modal-voice
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install modal
+modal setup
 modal serve -m modal_voice.modal_app
 ```
 
-Alternative (matches requested style):
+Open the `web_app` URL printed by Modal.
+
+---
+
+## Recommended Environment Configuration
 
 ```bash
-cd modal_voice
-modal serve modal_app.py
-```
-
-## Optional Model Settings
-
-```bash
-export WHISPER_MODEL=small
+export WHISPER_MODEL=tiny
 export WHISPER_COMPUTE_TYPE=float16
+export WHISPER_BEAM_SIZE=1
 
 export VLLM_MODEL=microsoft/Phi-3-mini-4k-instruct
 export VLLM_MAX_MODEL_LEN=2048
 export VLLM_GPU_MEMORY_UTILIZATION=0.9
 export VLLM_ENFORCE_EAGER=true
-export VLLM_MAX_OUTPUT_TOKENS=64
+export VLLM_MAX_OUTPUT_TOKENS=120
 
-export TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
+export TTS_MODEL=tts_models/en/ljspeech/vits
 
 export RAG_MAX_PAGES=50
-export RAG_TOP_K=3
+export RAG_TOP_K=2
 export RAG_CACHE_MAX_AGE_S=86400
 ```
 
-## UI Behavior
+Optional (faster model downloads):
 
-- White background
-- Single centered circular record button
-- Subtle pulse animation while recording
-- No transcript text shown
-- Auto-play audio response
-- Mobile responsive
+```bash
+export HF_TOKEN=<your_huggingface_token>
+```
 
-## Notes
+---
 
-- First request may be slower due to model cold start.
-- Service containers are configured warm (`min_containers=1`) and use Modal Volumes for HF/TTS caches to reduce repeated downloads.
-- RAG index is cached in a Modal Volume (`modalvoice-rag-cache`) so retrieval is local and fast after initial build.
-- If vLLM OOM occurs, switch to a smaller open model.
-- For lower latency, you can reduce model sizes or token limits.
+## Latency & Observability
+
+Each request logs:
+
+- `stt_latency_s`
+- `rag_latency_s`
+- `rag_hits`
+- `llm_latency_s`
+- `thinking_time_s` (= STT + LLM)
+- `tts_latency_s`
+- `total_latency_s`
+
+Response headers include the same metrics (`x-*`) for client-side analysis.
+
+---
+
+## Operational Notes
+
+- First run may be slower due to model/index initialization.
+- GPU services are configured with warm containers to reduce cold starts.
+- Model/index caches persist in Modal Volumes:
+  - HuggingFace cache
+  - TTS cache
+  - RAG vector DB cache
+- RAG retrieval context is treated as source-of-truth guidance for answers.
+
+---
+
+## Troubleshooting Quick Reference
+
+### `ModuleNotFoundError` in Modal container
+- Ensure dependency is installed in the correct Modal image (`.pip_install(...)`).
+
+### `libcublas.so.12` not found
+- Use NVIDIA CUDA base image for GPU inference containers.
+
+### TTS error: `No espeak backend found`
+- Install `espeak-ng` in container image.
+
+### Slow first response
+- Expected for cold start/model download.
+- Verify warm containers and cache volumes are active.
+
+### Inaccurate response
+- Increase `RAG_TOP_K` slightly (e.g. 3–4)
+- Rebuild or refresh RAG cache (`RAG_CACHE_MAX_AGE_S`)
+- Adjust prompt policy in `prompts.py`
+
+---
+
+## Demo Questions
+
+- What does Modal do, and when should I use it?
+- How do `@app.function` and `@app.cls` differ?
+- How do I run Whisper inference on Modal GPUs?
+- How do `min_containers`, `max_containers`, and `scaledown_window` affect latency and cost?
+- How do I cache model weights and avoid repeated cold starts?
+
+---
+
+## Design Principles
+
+- Correctness over gimmicks
+- Low-latency defaults, explicit tradeoffs
+- Clear module boundaries
+- Grounded generation via retrieval
+- Operational visibility at every stage

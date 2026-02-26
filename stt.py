@@ -15,10 +15,17 @@ class STTResult:
 class WhisperSTT:
     """Whisper wrapper for container-scoped STT inference."""
 
-    def __init__(self, model_name: str = "small", device: str = "cuda", compute_type: str = "float16") -> None:
+    def __init__(
+        self,
+        model_name: str = "small",
+        device: str = "cuda",
+        compute_type: str = "float16",
+        beam_size: int = 1,
+    ) -> None:
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
+        self.beam_size = beam_size
         self.model: Any | None = None
 
     def load(self) -> None:
@@ -43,7 +50,7 @@ class WhisperSTT:
             segments_iter, _ = self.model.transcribe(
                 tmp.name,
                 language=language,
-                beam_size=4,
+                beam_size=self.beam_size,
                 vad_filter=True,
             )
             segments = list(segments_iter)
@@ -52,7 +59,7 @@ class WhisperSTT:
                 segments_iter, _ = self.model.transcribe(
                     tmp.name,
                     language=language,
-                    beam_size=4,
+                    beam_size=self.beam_size,
                     vad_filter=False,
                 )
                 segments = list(segments_iter)

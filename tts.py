@@ -16,7 +16,7 @@ class TTSResult:
 class CoquiTTS:
     """Coqui TTS wrapper for container-scoped speech synthesis."""
 
-    def __init__(self, model_name: str = "tts_models/en/ljspeech/tacotron2-DDC", use_gpu: bool = True) -> None:
+    def __init__(self, model_name: str = "tts_models/en/ljspeech/vits", use_gpu: bool = True) -> None:
         self.model_name = model_name
         self.use_gpu = use_gpu
         self.model: Any | None = None

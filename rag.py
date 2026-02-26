@@ -1,126 +1,113 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
+import chromadb
 import requests
 from bs4 import BeautifulSoup
-
-TOKEN_RE = re.compile(r"[a-z0-9_]{2,}")
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 
 @dataclass
-class RAGChunk:
+class RAGDoc:
     title: str
     url: str
     text: str
-    tokens: list[str]
 
 
 class ModalExamplesRAG:
-    """Lightweight lexical RAG over Modal examples docs."""
+    """Vector DB RAG over Modal docs using ChromaDB.
+
+    The vector collection is treated as the single source of truth for answers.
+    """
 
     def __init__(
         self,
-        seed_url: str = "https://modal.com/docs/examples",
-        cache_path: str = "/root/rag/examples_index.json",
-        max_pages: int = 60,
+        cache_root: str = "/root/rag",
+        collection_name: str = "modal_docs",
+        max_pages: int = 80,
     ) -> None:
-        self.seed_url = seed_url
+        self.cache_root = Path(cache_root)
+        self.persist_dir = self.cache_root / "chroma"
+        self.meta_path = self.cache_root / "meta.json"
+        self.collection_name = collection_name
+        self.max_pages = max_pages
+
         self.seed_urls = [
             "https://modal.com/docs/examples",
             "https://modal.com/docs/guide",
             "https://modal.com/docs",
         ]
-        self.cache_path = Path(cache_path)
-        self.max_pages = max_pages
 
-        self.chunks: list[RAGChunk] = []
-        self.idf: dict[str, float] = {}
+        self.client: chromadb.PersistentClient | None = None
+        self.collection = None
 
     def load(self, max_cache_age_s: int = 86400) -> None:
-        if self._load_cache(max_cache_age_s=max_cache_age_s):
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        embedding_fn = SentenceTransformerEmbeddingFunction(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            embedding_function=embedding_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+        if self._is_fresh(max_cache_age_s=max_cache_age_s) and self.collection.count() > 0:
             return
-        self._build_index()
-        self._save_cache()
 
-    def retrieve(self, query: str, k: int = 3) -> list[dict[str, str]]:
-        if not self.chunks:
+        docs = self._crawl_docs()
+        self._rebuild_collection(docs)
+        self._write_meta(len(docs))
+
+    def retrieve(self, query: str, k: int = 4) -> list[dict[str, str]]:
+        if not self.collection:
             return []
 
-        q_tokens = self._tokenize(query)
-        if not q_tokens:
-            return []
+        results = self.collection.query(query_texts=[query], n_results=k)
+        docs = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
 
-        scores: list[tuple[float, int]] = []
-        for i, chunk in enumerate(self.chunks):
-            if not chunk.tokens:
-                continue
-
-            term_hits = 0.0
-            token_set = set(chunk.tokens)
-            for qt in q_tokens:
-                if qt in token_set:
-                    term_hits += self.idf.get(qt, 1.0)
-
-            if term_hits <= 0:
-                continue
-
-            # Slightly favor concise chunks for faster prompt processing.
-            brevity_penalty = max(1.0, len(chunk.text) / 600.0)
-            score = term_hits / brevity_penalty
-            scores.append((score, i))
-
-        scores.sort(reverse=True)
-
-        results: list[dict[str, str]] = []
-        for _, idx in scores[:k]:
-            chunk = self.chunks[idx]
-            results.append(
+        out: list[dict[str, str]] = []
+        for text, meta in zip(docs, metadatas):
+            out.append(
                 {
-                    "title": chunk.title,
-                    "url": chunk.url,
-                    "text": chunk.text[:420],
+                    "title": (meta or {}).get("title", "Modal docs"),
+                    "url": (meta or {}).get("url", "https://modal.com/docs"),
+                    "text": (text or "")[:520],
                 }
             )
-        return results
+        return out
 
-    def _build_index(self) -> None:
-        links = self._discover_links()
-        pages = links[: self.max_pages]
-
-        chunks: list[RAGChunk] = []
-        for url in pages:
-            doc = self._fetch_doc(url)
-            if not doc:
+    def _crawl_docs(self) -> list[RAGDoc]:
+        urls = self._discover_links()[: self.max_pages]
+        docs: list[RAGDoc] = []
+        for url in urls:
+            parsed = self._fetch_doc(url)
+            if not parsed:
                 continue
-            title, paragraphs = doc
-            for block in self._chunk_paragraphs(paragraphs):
-                tokens = self._tokenize(block)
-                if not tokens:
-                    continue
-                chunks.append(RAGChunk(title=title, url=url, text=block, tokens=tokens))
-
-        self.chunks = chunks
-        self._compute_idf()
+            title, blocks = parsed
+            for block in self._chunk_text(blocks, max_chars=800):
+                docs.append(RAGDoc(title=title, url=url, text=block))
+        return docs
 
     def _discover_links(self) -> list[str]:
-        urls: list[str] = []
+        collected: list[str] = []
         seen: set[str] = set()
 
         for seed in self.seed_urls:
-            discovered = self._discover_links_for_seed(seed)
-            for u in discovered:
-                if u in seen:
+            for link in self._discover_links_for_seed(seed):
+                if link in seen:
                     continue
-                seen.add(u)
-                urls.append(u)
+                seen.add(link)
+                collected.append(link)
 
-        return urls or [self.seed_url]
+        return collected or ["https://modal.com/docs"]
 
     def _discover_links_for_seed(self, seed: str) -> list[str]:
         try:
@@ -131,7 +118,6 @@ class ModalExamplesRAG:
 
         soup = BeautifulSoup(resp.text, "html.parser")
         base = f"{urlparse(seed).scheme}://{urlparse(seed).netloc}"
-        docs_prefixes = ("/docs/examples", "/docs/guide", "/docs")
 
         urls = [seed]
         seen = {seed}
@@ -139,17 +125,20 @@ class ModalExamplesRAG:
             href = a["href"].strip()
             if not href or href.startswith("#"):
                 continue
+
             absolute = urljoin(base, href)
             parsed = urlparse(absolute)
             if parsed.netloc != urlparse(seed).netloc:
                 continue
-            if not parsed.path.startswith(docs_prefixes):
+            if not parsed.path.startswith("/docs"):
                 continue
+
             cleaned = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
             if cleaned in seen:
                 continue
             seen.add(cleaned)
             urls.append(cleaned)
+
         return urls
 
     def _fetch_doc(self, url: str) -> tuple[str, list[str]] | None:
@@ -160,102 +149,72 @@ class ModalExamplesRAG:
             return None
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        title = (soup.title.string or "Modal Example").strip() if soup.title else "Modal Example"
-
+        title = (soup.title.string or "Modal docs").strip() if soup.title else "Modal docs"
         main = soup.find("main") or soup.find("article") or soup.body
         if not main:
             return None
 
-        paragraphs: list[str] = []
-        for p in main.find_all(["p", "li", "code", "h2", "h3"]):
-            text = " ".join(p.get_text(" ", strip=True).split())
-            if len(text) < 12:
+        blocks: list[str] = []
+        for node in main.find_all(["h1", "h2", "h3", "p", "li", "code"]):
+            text = " ".join(node.get_text(" ", strip=True).split())
+            if len(text) < 16:
                 continue
-            paragraphs.append(text)
+            blocks.append(text)
 
-        if not paragraphs:
+        if not blocks:
             return None
-        return title, paragraphs
+        return title, blocks
 
-    def _chunk_paragraphs(self, paragraphs: list[str], max_chars: int = 520) -> list[str]:
+    def _chunk_text(self, blocks: list[str], max_chars: int = 800) -> list[str]:
         chunks: list[str] = []
-        current: list[str] = []
+        cur: list[str] = []
         cur_len = 0
 
-        for p in paragraphs:
-            plen = len(p)
-            if cur_len + plen + 1 > max_chars and current:
-                chunks.append(" ".join(current))
-                current = [p]
-                cur_len = plen
+        for block in blocks:
+            size = len(block)
+            if cur and cur_len + size + 1 > max_chars:
+                chunks.append(" ".join(cur))
+                cur = [block]
+                cur_len = size
             else:
-                current.append(p)
-                cur_len += plen + 1
+                cur.append(block)
+                cur_len += size + 1
 
-        if current:
-            chunks.append(" ".join(current))
+        if cur:
+            chunks.append(" ".join(cur))
         return chunks
 
-    def _compute_idf(self) -> None:
-        df: dict[str, int] = {}
-        n = max(1, len(self.chunks))
+    def _rebuild_collection(self, docs: list[RAGDoc]) -> None:
+        if not self.collection:
+            return
 
-        for chunk in self.chunks:
-            for token in set(chunk.tokens):
-                df[token] = df.get(token, 0) + 1
+        existing = self.collection.get(include=[])
+        ids = existing.get("ids", [])
+        if ids:
+            self.collection.delete(ids=ids)
 
-        self.idf = {t: (1.0 + (n / (1 + freq))) for t, freq in df.items()}
+        if not docs:
+            return
 
-    def _tokenize(self, text: str) -> list[str]:
-        return TOKEN_RE.findall(text.lower())
+        self.collection.add(
+            ids=[f"doc_{i}" for i in range(len(docs))],
+            documents=[d.text for d in docs],
+            metadatas=[{"title": d.title, "url": d.url} for d in docs],
+        )
 
-    def _save_cache(self) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "ts": time.time(),
-            "chunks": [
-                {
-                    "title": c.title,
-                    "url": c.url,
-                    "text": c.text,
-                    "tokens": c.tokens,
-                }
-                for c in self.chunks
-            ],
-        }
-        self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    def _load_cache(self, max_cache_age_s: int) -> bool:
-        if not self.cache_path.exists():
+    def _is_fresh(self, max_cache_age_s: int) -> bool:
+        if not self.meta_path.exists():
             return False
-
         try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            meta = json.loads(self.meta_path.read_text(encoding="utf-8"))
         except Exception:
             return False
 
-        ts = float(payload.get("ts", 0))
-        if (time.time() - ts) > max_cache_age_s:
-            return False
+        ts = float(meta.get("ts", 0))
+        return (time.time() - ts) <= max_cache_age_s
 
-        raw_chunks = payload.get("chunks", [])
-        chunks: list[RAGChunk] = []
-        for item in raw_chunks:
-            try:
-                chunks.append(
-                    RAGChunk(
-                        title=item["title"],
-                        url=item["url"],
-                        text=item["text"],
-                        tokens=list(item.get("tokens", [])),
-                    )
-                )
-            except Exception:
-                continue
-
-        if not chunks:
-            return False
-
-        self.chunks = chunks
-        self._compute_idf()
-        return True
+    def _write_meta(self, doc_count: int) -> None:
+        self.meta_path.write_text(
+            json.dumps({"ts": time.time(), "doc_count": doc_count}, ensure_ascii=True),
+            encoding="utf-8",
+        )

@@ -8,6 +8,7 @@ let recorder = null;
 let chunks = [];
 let recording = false;
 let busy = false;
+let currentAudioUrl = null;
 
 function setBusy(value) {
   busy = value;
@@ -21,7 +22,9 @@ function setStatus(message) {
 
 async function playAudioBlob(blob) {
   if (!blob || blob.size === 0) throw new Error("Received empty audio response");
+  stopSpeaking();
   const url = URL.createObjectURL(blob);
+  currentAudioUrl = url;
   player.src = url;
   try {
     player.muted = false;
@@ -30,6 +33,17 @@ async function playAudioBlob(blob) {
     setStatus("Playing response...");
   } catch (error) {
     throw new Error(`Audio playback failed: ${error.message}`);
+  }
+}
+
+function stopSpeaking() {
+  player.pause();
+  player.currentTime = 0;
+  player.removeAttribute("src");
+  player.load();
+  if (currentAudioUrl) {
+    URL.revokeObjectURL(currentAudioUrl);
+    currentAudioUrl = null;
   }
 }
 
@@ -90,6 +104,13 @@ function stopRecording() {
 recordBtn.addEventListener("click", async () => {
   if (busy) return;
 
+  // If assistant audio is playing, use the main button as an interrupt.
+  if (!player.paused && player.currentTime > 0) {
+    stopSpeaking();
+    setStatus("Playback stopped.");
+    return;
+  }
+
   try {
     if (!recording) {
       await startRecording();
@@ -122,4 +143,8 @@ logoBtn.addEventListener("click", async () => {
   } finally {
     setBusy(false);
   }
+});
+
+player.addEventListener("ended", () => {
+  setStatus("Tap to ask about Modal");
 });

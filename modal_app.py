@@ -22,7 +22,7 @@ base_image = modal.Image.debian_slim(python_version="3.11").apt_install("ffmpeg"
 gpu_base_image = modal.Image.from_registry(
     "nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04",
     add_python="3.11",
-).apt_install("ffmpeg", "git")
+).apt_install("ffmpeg", "git", "espeak-ng")
 
 stt_image = (
     gpu_base_image
@@ -37,6 +37,8 @@ llm_image = (
         "transformers==4.45.2",
         "requests",
         "beautifulsoup4",
+        "chromadb==0.5.11",
+        "sentence-transformers==3.2.0",
         "fastapi==0.115.8",
         "python-multipart==0.0.20",
     )
@@ -60,7 +62,7 @@ web_image = (
 @app.cls(
     image=stt_image,
     gpu="A10G",
-    scaledown_window=300,
+    scaledown_window=1800,
     timeout=600,
     min_containers=1,
     max_containers=1,
@@ -69,9 +71,10 @@ web_image = (
 class STTService:
     @modal.enter()
     def load_once(self) -> None:
-        model_name = os.environ.get("WHISPER_MODEL", "small")
+        model_name = os.environ.get("WHISPER_MODEL", "tiny")
         compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
-        self.stt = WhisperSTT(model_name=model_name, compute_type=compute_type)
+        beam_size = int(os.environ.get("WHISPER_BEAM_SIZE", "1"))
+        self.stt = WhisperSTT(model_name=model_name, compute_type=compute_type, beam_size=beam_size)
         self.stt.load()
         hf_cache.commit()
 
@@ -84,7 +87,7 @@ class STTService:
 @app.cls(
     image=llm_image,
     gpu="A10G",
-    scaledown_window=300,
+    scaledown_window=1800,
     timeout=900,
     min_containers=1,
     max_containers=1,
@@ -112,15 +115,21 @@ class LLMService:
 
         self.rag = ModalExamplesRAG(max_pages=rag_pages)
         self.rag.load(max_cache_age_s=int(os.environ.get("RAG_CACHE_MAX_AGE_S", "86400")))
+        self.answer_cache: dict[str, dict] = {}
         hf_cache.commit()
         rag_cache.commit()
+        rag_docs = self.rag.collection.count() if getattr(self.rag, "collection", None) else 0
         print({"event": "llm_ready", "model": model_name, "enforce_eager": enforce_eager})
-        print({"event": "rag_ready", "chunks": len(self.rag.chunks), "max_pages": rag_pages})
+        print({"event": "rag_ready", "documents": rag_docs, "max_pages": rag_pages})
 
     @modal.method()
     def generate(self, prompt: str) -> dict:
-        max_tokens = int(os.environ.get("VLLM_MAX_OUTPUT_TOKENS", "64"))
-        rag_k = int(os.environ.get("RAG_TOP_K", "3"))
+        max_tokens = int(os.environ.get("VLLM_MAX_OUTPUT_TOKENS", "120"))
+        rag_k = int(os.environ.get("RAG_TOP_K", "2"))
+        cache_key = " ".join(prompt.lower().split())
+        cached = self.answer_cache.get(cache_key)
+        if cached:
+            return cached
         t0 = time.perf_counter()
         contexts = self.rag.retrieve(prompt, k=rag_k) if hasattr(self, "rag") else []
         rag_latency_s = time.perf_counter() - t0
@@ -130,18 +139,22 @@ class LLMService:
             max_tokens=max_tokens,
             temperature=0.1,
         )
-        return {
+        out = {
             "text": result.text,
             "latency_s": result.latency_s,
             "rag_latency_s": rag_latency_s,
             "rag_hits": len(contexts),
         }
+        if len(self.answer_cache) >= 256:
+            self.answer_cache.pop(next(iter(self.answer_cache)))
+        self.answer_cache[cache_key] = out
+        return out
 
 
 @app.cls(
     image=tts_image,
     gpu="A10G",
-    scaledown_window=300,
+    scaledown_window=1800,
     timeout=600,
     min_containers=1,
     max_containers=1,
@@ -153,20 +166,29 @@ class LLMService:
 class TTSService:
     @modal.enter()
     def load_once(self) -> None:
-        model_name = os.environ.get("TTS_MODEL", "tts_models/en/ljspeech/tacotron2-DDC")
+        model_name = os.environ.get("TTS_MODEL", "tts_models/en/ljspeech/vits")
         self.tts = CoquiTTS(model_name=model_name, use_gpu=True)
         self.tts.load()
+        self.cache: dict[str, dict] = {}
         tts_cache.commit()
         print({"event": "tts_ready", "model": model_name})
 
     @modal.method()
     def synthesize(self, text: str) -> dict:
+        cached = self.cache.get(text)
+        if cached:
+            return cached
         result = self.tts.synthesize(text)
-        return {
+        out = {
             "audio_bytes": result.audio_bytes,
             "latency_s": result.latency_s,
             "mime_type": result.mime_type,
         }
+        # Small in-memory cache for repeated prompts.
+        if len(self.cache) >= 128:
+            self.cache.pop(next(iter(self.cache)))
+        self.cache[text] = out
+        return out
 
 
 stt_service = STTService()
@@ -204,9 +226,6 @@ def web_app() -> FastAPI:
 
         llm = await llm_service.generate.remote.aio(prompt=transcript)
         answer = (llm.get("text") or "").strip()
-        # Keep speech responses short for low-latency voice UX.
-        if len(answer) > 240:
-            answer = answer[:240].rsplit(" ", 1)[0].strip() + "."
         thinking_time_s = float(stt.get("latency_s", 0.0)) + float(llm.get("latency_s", 0.0))
 
         tts = await tts_service.synthesize.remote.aio(text=answer)
