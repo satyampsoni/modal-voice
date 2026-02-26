@@ -6,16 +6,7 @@ ModalVoice is designed to feel like a real-time voice assistant while staying pr
 
 The assistant is intentionally specialized for Modal topics (deployment, GPU workloads, autoscaling, functions, images, secrets, and operations).
 
----
-
-## Why This Project
-
-Most voice assistants are stitched together from paid external APIs. ModalVoice demonstrates an end-to-end, open-model architecture that is:
-
-- Self-hosted inference on Modal
-- Grounded with docs retrieval (RAG)
-- Production-structured and observable
-- Optimized for practical latency
+<img width="1507" height="826" alt="Screenshot 2026-02-26 at 8 37 52 PM" src="https://github.com/user-attachments/assets/21a3aea8-c27e-490a-9678-b94dd1f8e446" />
 
 ---
 
