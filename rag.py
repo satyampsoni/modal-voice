@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,7 +70,11 @@ class ModalExamplesRAG:
         if not self.collection:
             return []
 
-        results = self.collection.query(query_texts=[query], n_results=k)
+        normalized_query = self.normalize_text(query)
+        if not normalized_query:
+            return []
+
+        results = self.collection.query(query_texts=[normalized_query], n_results=k)
         docs = results.get("documents", [[]])[0]
         metadatas = results.get("metadatas", [[]])[0]
 
@@ -93,7 +98,10 @@ class ModalExamplesRAG:
                 continue
             title, blocks = parsed
             for block in self._chunk_text(blocks, max_chars=800):
-                docs.append(RAGDoc(title=title, url=url, text=block))
+                normalized_block = self.normalize_text(block)
+                if not normalized_block:
+                    continue
+                docs.append(RAGDoc(title=title, url=url, text=normalized_block))
         return docs
 
     def _discover_links(self) -> list[str]:
@@ -164,6 +172,12 @@ class ModalExamplesRAG:
         if not blocks:
             return None
         return title, blocks
+
+    def normalize_text(self, text: str) -> str:
+        """Shared normalization for both documents and user queries."""
+        out = (text or "").strip().lower()
+        out = re.sub(r"\s+", " ", out)
+        return out
 
     def _chunk_text(self, blocks: list[str], max_chars: int = 800) -> list[str]:
         chunks: list[str] = []

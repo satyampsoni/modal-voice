@@ -26,6 +26,7 @@ except ModuleNotFoundError:
     from stt import WhisperSTT
     from tts import CoquiTTS
 
+
 app = modal.App("modal-voice")
 hf_cache = modal.Volume.from_name("modalvoice-hf-cache", create_if_missing=True)
 tts_cache = modal.Volume.from_name("modalvoice-tts-cache", create_if_missing=True)
@@ -276,7 +277,7 @@ def web_app() -> FastAPI:
             "x-total-latency-s": f"{total_latency:.3f}",
         }
         return Response(content=audio_out, media_type=tts.get("mime_type", "audio/wav"), headers=headers)
-
+# this needs a fix 
     @api.post("/api/greet")
     async def greet() -> Response:
         greeting = "Hey, I am ModalVoice. How can I help you?"
